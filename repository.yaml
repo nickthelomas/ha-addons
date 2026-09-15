@@ -1,0 +1,9 @@
+# Home Assistant add-on repository manifest.
+#
+# This is what the Supervisor reads when a customer pastes the repo URL into
+# Settings -> Add-ons -> Add-on Store -> ... -> Repositories. It has to be
+# the ROOT of a public git repo -- the customer's Supervisor clones it over
+# https with no credentials, so nothing private can ever live here.
+name: ElectriFix Add-ons
+url: https://github.com/nickthelomas/ha-addons
+maintainer: ElectriFix Perth <admin@electrifixperth.com>

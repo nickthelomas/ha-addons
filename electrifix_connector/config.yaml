@@ -1,0 +1,56 @@
+# The ElectriFix Connector.
+#
+# One job's temporary way in. The customer pastes the job code from their job
+# page, starts the add-on, and their Home Assistant dials OUT to a tunnel we
+# created for that job alone. Nothing is opened on their network, no port is
+# forwarded, and no YAML is edited.
+#
+# WHAT THIS ADD-ON IS NOT ALLOWED TO DO, and why each line matters:
+#   host_network: false   -- it gets its own network namespace. With host
+#                            networking it could reach the customer's whole
+#                            LAN, which is exactly what we promise it cannot.
+#   no ports:             -- Caddy listens on 127.0.0.1 INSIDE this
+#                            container. Nothing is published to the LAN, so
+#                            the only way in is the tunnel.
+#   no hassio_api /       -- it never talks to the Supervisor or to HA's API.
+#   homeassistant_api        It is a pipe, not an integration.
+#   no privileged, no     -- nothing needs kernel capabilities to run
+#   apparmor: false          cloudflared and a reverse proxy.
+#
+# A customer can read this file before installing, and several will. It has
+# to stand up to that reading.
+name: ElectriFix Connector
+version: "1.0.3"
+slug: electrifix_connector
+description: >-
+  A temporary, secure way for ElectriFix to reach your Home Assistant while
+  your job is open. Uninstall it when you're done and the way in is gone.
+url: https://fix.electrifixperth.com.au
+# NO i386: Caddy publishes no linux/386 build, so the image cannot be built
+# for it -- and an arch offered but unbuildable is a customer watching an
+# install fail with nothing to read. See the Dockerfile's ARCH note.
+# No `image:` key: the Supervisor builds this add-on locally from the
+# Dockerfile + build.yaml on the customer's own box (takes a few minutes the
+# first time). A prebuilt image on a registry can be added later.
+arch:
+  - aarch64
+  - amd64
+  - armv7
+  - armhf
+init: false
+host_network: false
+# Stated explicitly rather than left to the Supervisor's default, so a
+# customer reading this file can CHECK it: no ingress means the add-on has no
+# panel in the Home Assistant sidebar and the Supervisor publishes nothing on
+# its behalf. Together with the absent `ports:` that is the whole of "nothing
+# on your network gets opened up".
+ingress: false
+privileged: []
+startup: application
+boot: manual
+options:
+  job_code: ""
+schema:
+  # `password` so the Supervisor UI masks it and it is redacted from
+  # diagnostics. A tunnel token is a bearer credential for this house.
+  job_code: password

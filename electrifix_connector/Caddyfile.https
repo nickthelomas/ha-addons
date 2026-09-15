@@ -1,0 +1,98 @@
+# The ONE reason this add-on contains a reverse proxy at all.
+#
+# cloudflared adds `X-Forwarded-For`, `X-Forwarded-Proto` and
+# `X-Forwarded-Host` to every request it passes to the origin. Home Assistant
+# sees those and refuses the request with
+#
+#   "A request from a reverse proxy was received from <ip>, but your
+#    HTTP integration is not set-up for reverse proxies"
+#
+# ...unless the customer edits `configuration.yaml` to add
+# `http: use_x_forwarded_for: true` and a `trusted_proxies:` block, and then
+# restarts Home Assistant. That is YAML editing and a restart, on the one
+# screen where we are asking a stranger to trust us -- and it is a change to
+# THEIR config that outlives the job.
+#
+# Stripping the three headers here removes the whole problem. Home Assistant
+# sees an ordinary request from a container on its own Docker network, exactly
+# as it would from the companion app on the LAN, and the customer edits
+# nothing.
+#
+# `header_up -Name` DELETES the header on the way upstream. It is not a
+# rewrite, so no forged client IP can be smuggled through either.
+#
+# THIS IS THE HTTPS TEMPLATE, used when the customer has `ssl_certificate:`
+# under `http:` in their configuration.yaml and Home Assistant therefore
+# serves TLS on 8123. `run.sh` probes once at start and installs either this
+# file or `Caddyfile.http` as /etc/caddy/Caddyfile. It is never both.
+#
+# WHY TWO FILES AND NOT ONE WITH TWO UPSTREAMS: Caddy 2.8 refuses that
+# outright --
+#
+#   parsing upstream 'https://homeassistant:8123': for now, all proxy
+#   upstreams must use the same scheme (transport protocol)
+#
+# -- so a mixed-scheme Caddyfile makes `caddy run` exit 1 and the add-on
+# proxy never starts at all. Verified against caddy:2.8-alpine.
+#
+# WHY `tls_insecure_skip_verify` IS CORRECT HERE, rather than lazy:
+#
+#   * That certificate is almost always SELF-SIGNED, or issued for a name
+#     this request is not using -- the upstream is `homeassistant`, a Docker
+#     network alias. There is no CA that could verify the first case and no
+#     name that would match the second, so verification would fail 100% of
+#     the time and the add-on would never work for anybody.
+#   * The connection never leaves the customer's own machine. It is container
+#     to container on the Supervisor's bridge network, so there is no network
+#     path for anyone to sit in the middle of.
+#   * The real authentication is the Home Assistant long-lived token, and the
+#     real transport security is the Cloudflare tunnel on the OTHER side of
+#     this hop -- neither of which this setting touches.
+{
+	# Nothing is served to the world from here: the only client is
+	# cloudflared, over the container's own loopback.
+	admin off
+	auto_https off
+	log {
+		# stderr, so it lands in the add-on log the customer can read.
+		output stderr
+		# No request URIs: a Home Assistant URL can name entities and
+		# areas, and this log is pasted into support threads.
+		format console
+		level ERROR
+	}
+}
+
+# 127.0.0.1 ONLY. Binding 0.0.0.0 would publish an unauthenticated proxy to
+# Home Assistant onto the customer's LAN, which is the exact opposite of what
+# this add-on promises.
+:8124 {
+	# `:8124` + `bind`, NOT `http://127.0.0.1:8124`: a site address with a host
+	# in it only matches requests whose Host header IS that host, and
+	# cloudflared forwards the customer's real hostname (j-….electrifixperth.com.au)
+	# as Host. With the old address Caddy answered every tunnel request with an
+	# empty 200 (found on the K16, 2026-09-13). `bind` keeps the listener on
+	# loopback only; the Host header may be anything.
+	bind 127.0.0.1
+	reverse_proxy https://homeassistant:8123 {
+		# THE LINES THIS WHOLE FILE EXISTS FOR.
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Proto
+		header_up -X-Forwarded-Host
+
+		# Home Assistant's WebSocket API is how most of the audit is
+		# read; Caddy proxies the upgrade natively, and these keep a
+		# long-lived socket from being cut mid-read.
+		flush_interval -1
+		transport http {
+			tls
+			# See the block comment above: self-signed or wrong-name
+			# is the NORMAL case for Home Assistant's own
+			# certificate, and this hop never leaves the customer's
+			# own machine.
+			tls_insecure_skip_verify
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+}
